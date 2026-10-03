@@ -2,7 +2,13 @@
 title: "Assessment_3"
 author: "Emelia Appiah"
 date: "`r Sys.Date()`"
-output: pdf_document
+output:
+  html_document:
+    theme: cosmo
+    highlight: tango
+    toc: true
+    toc_depth: 2
+    toc_float: true
 ---
 
 ```{r setup, include=FALSE}
@@ -19,27 +25,30 @@ knitr::opts_chunk$set(
 ```{r load-package libraries, inlude = FALSE}
 library(pacman)
 pacman::p_load(
-  rio, here, tidyverse,knitr,kableExtra, skimr,
+  rio, here, tidyverse,knitr,kableExtra, skimr, DT,
   formatR, gridExtra, janitor, cowplot, ggpubr, scales
 )
 
 ```
 
 ```{r import-data}
-nhanes_df <- import(here("data", "cleaned_NHANES.csv"))
+nhanes_df <- import(here("data", "cleaned", "cleaned_NHANES.csv"))
 
-diet_df <- import(here("data", "diet.csv"))
+diet_df <- import(here("data", "cleaned", "diet.csv"))
 
 ```
-
-
-# Question 1: Reproducing Figures
+# Question 1: Reproducing Figures 
 The cleaned labels for both gender and ethnicity are used instead of the codes in the raw dataset. 
 
 To keep the same colour assignment as the original figures `gender` was ordered with `Male` first. (code `1` = male, code `2` = female).
 The ethnicity categories were also ordered following the original `RIDRETH3` codes (1 = Mexican, 2 = Other Hispanic, 3 = White, 4 = Black, 6 = Asian, 7 = Other).
 
 The age histogram in the original figure only contained adults, so the data was restricted to participants aged 20 and older. Bins were set with `binwidth = 5`and `boundary = 20`, so each bin covers exactly five years of age.
+
+## Figures {.tabset}
+
+
+### Individual Figures
 ```{r recreating age-histogram and Ethnicity-histogram}
 #Age histogram
 age_hist <- nhanes_df %>%
@@ -75,7 +84,8 @@ age_hist
 ethnicity_bar
 
 ```
-## Combining the figures
+
+### Combined Figures
 ```{r combining figures using cowplot}
 combined_figures_cowplot <- plot_grid(age_hist, ethnicity_bar, ncol = 1, 
           labels = c("A", "B"), align = "v")
@@ -88,7 +98,6 @@ annotate_figure(
   )
 )
 ```
-
 
 ```{r combining figures using ggpubr}
 combined_figures_ggarange <- ggarrange(age_hist, ethnicity_bar,
@@ -111,12 +120,25 @@ With the `align = "v"` the `plot_grid()` output lines up the two panels so their
 `ggarrange()` on the other hand has a built-in `common.legend = TRUE` option that draws one shared legend for the whole figure. Because both plots use the same fill variable with the same colors, a single legend is all the reader needs, and the panels get more width. 
 
 # Question 2: Visualizing key characteristics
+```{r nhanes-table}
+library(DT)
+
+DT::datatable(
+  nhanes_df,
+  filter = "top",
+  options = list(
+    pageLength = 10,
+    scrollX = TRUE
+  ),
+  caption = "Cleaned NHANES Dataset"
+)
+```
+
 ```{r summary statistics +missing values}
 nhanes_df %>%
   summarise(across(c(age, gender, ethnicity_1, ethnicity_2),
                    ~ sum(is.na(.x)))) %>%
   knitr::kable(caption = "Number of missing values per variable")
-
 ```
 None of the four variables had missing values, so every one of the
 `r comma(nrow(nhanes_df))` participants is included in the plots below.
