@@ -1,0 +1,571 @@
+---
+title: "Assessment_2_report"
+author: "Emelia Appiah"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+#set global knitr options
+knitr::opts_chunk$set(echo = FALSE, results = 'markup', message = FALSE, warning = FALSE)
+#load packages
+library(tidyverse)
+library(rio)
+library(janitor)
+library(skimr)
+library(here)
+# Small helper so numbers in the text print with commas
+fmt <- function(x) format(x, big.mark = ",")
+```
+
+# 1. Introduction
+
+This report documents the importing, preliminary exploration, merging and
+preparation, cleaning and variable re-coding, and filtering and reshaping of
+NHANES demographic and blood-pressure datasets from the 2013–2014, 2015–2016,
+and 2017–2018 survey cycles.
+
+For each section, the report first explains the steps taken, then shows the
+code, then shows a snippet of the key output (tables are trimmed to the most
+informative rows), and finally interprets the result. All figures quoted in the
+text are calculated directly from the data, so they update automatically each
+time the report is knitted.
+
+# 2. Data Import and Preliminary Exploration
+
+This section imports the six NHANES files (a demographic file and a
+blood-pressure examination file for each of the three cycles) and inspects their
+dimensions and structure before any changes are made. Getting to know the raw
+data first shows which variables need cleaning or re-coding later.
+
+## Importing the Datasets
+
+The `import()` function from the `rio` package reads each SAS transport (`.xpt`)
+file, and `here()` builds the file path from the project folder so that the
+report runs on any computer.
+
+```{r import-data}
+#Importing Datasets
+demographic_2013_14 <- import(here("data", "DEMO_H-2013-14.xpt"))
+pressure_2013_14  <- import(here("data", "BPX_H-2013-14.xpt"))
+demographic_2015_16 <- import(here("data", "DEMO_I-2015-16.xpt"))
+pressure_2015_16  <- import(here("data", "BPX_I-2015-16.xpt"))
+demographic_2017_18 <- import(here("data", "DEMO_J-2017-18.xpt"))
+pressure_2017_18  <- import(here("data", "BPX_J-2017-18.xpt"))
+```
+## Data Dimensions
+
+The dimensions show the number of rows (observations) and columns (variables) in
+each dataset. They were obtained with `dim()` and collected into one table so the
+six files can be compared at a glance. 
+
+```{r data-dimension}
+dim_pres_13_14 <- dim(pressure_2013_14)
+dim_demo_13_14 <- dim(demographic_2013_14)
+dim_demo_15_16 <- dim(demographic_2015_16)
+dim_pres_15_16 <- dim(pressure_2015_16)
+dim_demo_17_18 <- dim(demographic_2017_18)
+dim_pres_17_18 <- dim(pressure_2017_18)
+
+dimension_table <- tibble(
+  cycle   = rep(c("2013-2014", "2015-2016", "2017-2018"), each = 2),
+  dataset = rep(c("Demographic", "Blood pressure"), times = 3),
+  rows    = c(dim_demo_13_14[1], dim_pres_13_14[1], dim_demo_15_16[1],
+              dim_pres_15_16[1], dim_demo_17_18[1], dim_pres_17_18[1]),
+  columns = c(dim_demo_13_14[2], dim_pres_13_14[2], dim_demo_15_16[2],
+              dim_pres_15_16[2], dim_demo_17_18[2], dim_pres_17_18[2])
+)
+
+knitr::kable(dimension_table, caption = "Dimensions of the raw NHANES datasets")
+
+```
+
+The demographic datasets ranged from `r fmt(dim_demo_17_18[1])` rows and
+`r dim_demo_17_18[2]` columns in 2017–2018 to `r fmt(dim_demo_13_14[1])` rows and
+`r dim_demo_13_14[2]` columns in 2013–2014. 
+
+The blood pressure datasets ranged from
+`r fmt(dim_pres_17_18[1])` rows and `r dim_pres_17_18[2]` columns in 2017–2018 to
+`r fmt(dim_pres_13_14[1])` rows and `r dim_pres_13_14[2]` columns in 2013–2014. 
+
+The number of columns differed slightly between cycles because NHANES adds and
+removes some variables from one cycle to the next, which is why later steps
+select only the columns that are common to the analysis.
+
+
+## Variable Structures
+
+The structure of each dataset was examined with `str()` to review variable names
+and data types, and `summary()` was used to see the range and typical values of
+key variables. A snippet of the first rows of the variables of interest is displayed below.
+
+```{r variable-structure, results = 'hide'}
+#Variable Structure
+str(demographic_2013_14)
+str(pressure_2013_14)
+
+str(demographic_2015_16)
+str(pressure_2015_16)
+
+str(demographic_2017_18)
+str(pressure_2017_18)
+
+#Data Summaries using only 2013-14 cycle 
+summary(demographic_2013_14)
+summary(pressure_2013_14)
+```
+
+
+```{r snippets of data-structure}
+#Snippet of the data structure for key variables 
+demographic_2013_14 |>
+  select(SEQN, RIAGENDR, RIDAGEYR, RIDRETH1, DMDEDUC2, DMDMARTL) |>
+  head(6) |>
+  knitr::kable(caption = "Snippet of the raw demographic data (2013-2014)")
+
+pressure_2013_14 |>
+  select(SEQN, BPXSY1, BPXDI1, BPXSY2, BPXDI2, PEASCCT1) |>
+  head(6) |>
+  knitr::kable(caption = "Snippet of the raw blood pressure data (2013-2014)")
+```
+
+The demographic datasets include identifiers, quantitative measurements, categorical variables stored numerically. SEQN identifies respondents, while RIDAGEYR represents age. Variables such as RIAGENDR, RIDRETH1, DMDEDUC2, and DMDMARTL are categorical, although stored numerically.
+
+The blood pressure datasets also include identifiers, measurements, and categorical variables stored numerically. BPXSY1 and BPXDI1 represent quantitative systolic and diastolic blood pressure measurements, while BPARM, BPCSZ, and BPXPTY represent coded categories.
+
+Thus, some numeric variables, such as RIAGENDR, RIDRETH1, BPARM, and BPCSZ, would be more appropriately treated as factors for categorical analysis. SEQN serves as an identifier, while age and blood pressure measurements are appropriately stored as numeric values.
+
+# 3 Datasets Merging and Preparation
+
+This section combines the demographic and blood pressure datasets across the
+three survey cycles and keeps only the columns needed for the analysis. 
+
+## Column Selection
+
+The columns to keep were listed in two vectors, `pressure_keep` and
+`demographic_keep`. The `select()` function with `any_of()` keeps only those
+columns that exist in a given cycle, so a variable missing from one cycle does
+not cause an error. The `mutate()` function was then used to create `wave_id`,
+which records the survey cycle each row came from.
+
+## Combine Datasets
+
+The `bind_rows()` function stacked the selected columns from the three cycles,
+one combined blood pressure dataset (`pressure_all_cycles`) and one combined
+demographic dataset (`demographic_all_cycles`). Because the rows are stacked
+together, `wave_id` is what keeps track of the cycle for each record.
+```{r select and combine columns}
+#select columns to keep
+pressure_keep <- c("SEQN", "PEASCCT1", "BPXSY1", "BPXDI1",
+                   "BPXSY2", "BPXDI2", "BPXSY3", "BPXDI3",
+                   "BPXSY4", "BPXDI4")
+
+demographic_keep <- c("SEQN", "RIAGENDR", "RIDAGEYR", "RIDRETH1",
+                      "RIDRETH3", "DMDEDUC2", "DMDMARTL",
+                      "DMDFMSIZ", "INDFMIN2")
+
+#Combine datasets and create a new column for survey cycle
+
+pressure_all_cycles <- bind_rows(
+  select(pressure_2013_14, any_of(pressure_keep)) |> mutate(wave_id = "2013-2014"),
+  select(pressure_2015_16, any_of(pressure_keep)) |> mutate(wave_id = "2015-2016"),
+  select(pressure_2017_18, any_of(pressure_keep)) |> mutate(wave_id = "2017-2018")
+)
+
+demographic_all_cycles <- bind_rows(
+  select(demographic_2013_14, any_of(demographic_keep)) |> mutate(wave_id = "2013-2014"),
+  select(demographic_2015_16, any_of(demographic_keep)) |> mutate(wave_id = "2015-2016"),
+  select(demographic_2017_18, any_of(demographic_keep)) |> mutate(wave_id = "2017-2018")
+)
+
+# Rows contributed by each survey cycle
+pressure_all_cycles |>
+  count(wave_id) |>
+  knitr::kable(caption = "Blood pressure records per survey cycle")
+demographic_all_cycles |>
+  count(wave_id) |>
+  knitr::kable(caption = "Demographic records per survey cycle")
+```
+The combined blood pressure dataset, `pressure_all_cycles`, contains
+`r fmt(nrow(pressure_all_cycles))` rows and `r ncol(pressure_all_cycles)`
+columns, while the combined demographic dataset, `demographic_all_cycles`,
+contains `r fmt(nrow(demographic_all_cycles))` rows and
+`r ncol(demographic_all_cycles)` columns.
+
+## Duplicate Check on the Join Key
+
+Before joining, `count()` and `filter()` were used to check that each
+participant (`SEQN`) appears only once per cycle (`wave_id`) in each combined
+dataset. A join on a key that is not unique would multiply rows unexpectedly.
+```{r duplicate-key-check}
+duplicate_keys_pressure <- pressure_all_cycles |>
+  count(SEQN, wave_id) |>
+  filter(n > 1)
+
+duplicate_keys_demographic <- demographic_all_cycles |>
+  count(SEQN, wave_id) |>
+  filter(n > 1)
+
+tibble(
+  dataset = c("pressure_all_cycles", "demographic_all_cycles"),
+  duplicated_keys = c(nrow(duplicate_keys_pressure),
+                      nrow(duplicate_keys_demographic))
+) |> knitr::kable(caption = "Participants appearing more than once per cycle")
+
+```
+## Join Datasets
+
+A `full_join()` was used to keep every record from both combined tables,
+including any that have no match in the other table. Records are matched on the
+participant identifier `SEQN`; the cycle indicator `wave_id` is included in the
+join key as well, so that a participant is only ever matched within the same
+survey cycle. `anti_join()` was then used to count the records on each side that
+found no match.
+```{r join and check dataset}
+
+#Join data from the combined pressure and demographic dataset
+
+demo_pres_merged <- full_join(pressure_all_cycles, demographic_all_cycles,
+                           by = c("SEQN", "wave_id"))
+# Merge summary
+merge_check <- tibble(
+  blood_pressure_rows = nrow(pressure_all_cycles),
+  demographic_rows    = nrow(demographic_all_cycles),
+  merged_rows         = nrow(demo_pres_merged),
+  merged_columns      = ncol(demo_pres_merged),
+  unmatched_pres       = anti_join(pressure_all_cycles, demographic_all_cycles,
+                                  by = c("SEQN", "wave_id")) |> nrow(),
+  unmatched_demo      = anti_join(demographic_all_cycles, pressure_all_cycles,
+                                  by = c("SEQN", "wave_id")) |> nrow()
+)
+
+knitr::kable(merge_check, caption = "Merge summary")
+
+# Snippet of the merged data
+demo_pres_merged |>
+  select(SEQN, wave_id, RIAGENDR, RIDAGEYR, BPXSY1, BPXDI1) |>
+  head(6) |>
+  knitr::kable(caption = "Snippet of the merged dataset (demo_pres_merged)")
+```
+The merged dataset contains `r fmt(merge_check$merged_rows)` rows and
+`r merge_check$merged_columns` columns. It has the same number of rows as the
+demographic dataset (`r fmt(merge_check$demographic_rows)`) because
+`full_join()` keeps all records from both tables and every blood pressure record
+found a demographic match: there were `r merge_check$unmatched_pres` unmatched
+blood pressure records, while `r fmt(merge_check$unmatched_demo)` demographic
+records had no matching blood pressure record (participants who were
+interviewed but did not receive a blood pressure exam). The duplicate check found
+`r nrow(duplicate_keys_pressure) + nrow(duplicate_keys_demographic)` duplicated
+join keys, so the join did not create extra rows. The merged dataset has
+`r merge_check$merged_columns` columns because the two tables share `SEQN` and
+`wave_id`, which appear only once after the join.
+
+# 4 Data Cleaning and Variable Recoding
+
+This section presents a structured cleaning pipeline to prepare the merged data
+for analysis: reviewing the data, standardizing column names, recoding variables
+into factors, creating age groups, and handling duplicates and invalid blood
+pressure readings.
+
+## Review the Merged Data
+
+The `skim_without_charts()` function from `skimr` was used to review `demo_pres_merged`. 
+A missing-value summary was then created with `summarise(across(...))`
+and `pivot_longer()` to show how many values are missing in each column and what
+percentage of the rows that represents.
+```{r skim data review}
+#data review
+skim_without_charts(demo_pres_merged)
+```
+
+
+```{r missing value review}
+raw_missing <- demo_pres_merged |>
+  summarise(across(everything(), ~ sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "variable", values_to = "n_missing") |>
+  mutate(pct_missing = round(100 * n_missing / nrow(demo_pres_merged), 1))
+
+knitr::kable(raw_missing, caption = "Missing values per column before cleaning")
+
+# Named vectors used to quote the results in the text
+miss_n   <- setNames(raw_missing$n_missing, raw_missing$variable)
+miss_pct <- setNames(raw_missing$pct_missing, raw_missing$variable)
+n_numeric   <- sum(sapply(demo_pres_merged, is.numeric))
+n_character <- sum(sapply(demo_pres_merged, is.character))
+first3_cols <- c(paste0("BPXSY", 1:3), paste0("BPXDI", 1:3))
+```
+
+The merged dataset contains `r fmt(nrow(demo_pres_merged))` rows and
+`r ncol(demo_pres_merged)` columns, made up of `r n_numeric` numeric variables
+and `r n_character` character variable (`wave_id`).
+
+Missing values varied widely across variables. The blood pressure comment variable
+(`PEASCCT1`) had `r fmt(miss_n["PEASCCT1"])` missing values
+(`r miss_pct["PEASCCT1"]`%), which is expected because it is only filled when
+the technician noted a problem. The fourth systolic and diastolic readings
+(`BPXSY4` and `BPXDI4`) had `r fmt(miss_n["BPXSY4"])` and
+`r fmt(miss_n["BPXDI4"])` missing values (`r miss_pct["BPXSY4"]`% and
+`r miss_pct["BPXDI4"]`%), since a fourth reading was rarely needed. The first
+three blood pressure readings had between `r min(miss_pct[first3_cols])`% and
+`r max(miss_pct[first3_cols])`% missing.
+
+Among the demographic variables, `DMDEDUC2` had `r fmt(miss_n["DMDEDUC2"])`
+missing values (`r miss_pct["DMDEDUC2"]`%) and `DMDMARTL` had
+`r fmt(miss_n["DMDMARTL"])` (`r miss_pct["DMDMARTL"]`%), while `INDFMIN2` had
+`r fmt(miss_n["INDFMIN2"])` (`r miss_pct["INDFMIN2"]`%). Education and marital
+status are not recorded for younger participants, which explains most of their
+missing values. This review gave an initial assessment of data completeness and
+identified the variables that need attention during cleaning and analysis.
+
+## Standardize Column Names
+
+`clean_names()` from `janitor` converted all column names to lower case with
+underscores, and `rename()` then gave each column a clear, descriptive name
+(for example, `seqn` became `participant_id` and `bpxsy1` became
+`systolic_bp_1`).
+```{r standardize and rename columns}
+#clean column names and renaming variables
+demo_pres_clean_cols <- demo_pres_merged |>
+  janitor::clean_names() |>
+  rename(
+    participant_id = seqn,
+    survey_cycle = wave_id,
+    sex = riagendr,
+    age_years = ridageyr,
+    race_1 = ridreth1,
+    race_3 = ridreth3,
+    education = dmdeduc2,
+    marital_status = dmdmartl,
+    family_size = dmdfmsiz,
+    family_income = indfmin2,
+    blood_pressure_comment = peascct1,
+    systolic_bp_1 = bpxsy1,
+    diastolic_bp_1 = bpxdi1,
+    systolic_bp_2 = bpxsy2,
+    diastolic_bp_2 = bpxdi2,
+    systolic_bp_3 = bpxsy3,
+    diastolic_bp_3 = bpxdi3,
+    systolic_bp_4 = bpxsy4,
+    diastolic_bp_4 = bpxdi4
+  )
+names(demo_pres_clean_cols)
+```
+## Recode Variables and Create Age Groups
+The categorical demographic variables (gender, ethnicity, education, marital
+status, family income, and family size) were converted from numeric codes to
+factors using `factor()` with the categories in the NHANES data dictionary. Any
+code that is not listed in `levels` (such as "refused" or "don't know") becomes
+`NA` automatically.
+Age was grouped into five categories (0–19, 20–39, 40–59, 60–79, and 80+) 
+with `cut()`, where `right = FALSE` makes each group start at its lower bound. 
+The identifier and survey cycle were also converted to character and factor types 
+respectively.
+```{r recoding categorical variables}
+#Recoding variables and creating age groups
+demo_pres_clean_cols <- demo_pres_clean_cols |>
+  mutate(participant_id = as.character(participant_id),
+        survey_cycle  = factor(survey_cycle, levels = c("2013-2014", "2015-2016",                                                      "2017-2018")),
+    gender = factor(sex,
+                    levels = c(1, 2),
+                    labels = c("Male", "Female")),
+    
+    ethnicity_1 = factor (race_1,
+                        levels = c(1, 2,3,4,5),  
+                        labels = c("Mexican American", "Other Hispanic",
+                                   "Non-Hispanic White", "Non-Hispanic Black",
+                                   "Other Race, incluuding Multi-Racial")),
+    ethnicity_3 = factor(race_3, levels = c(1, 2, 3, 4, 6, 7),
+                        labels = c("Mexican American", "Other Hispanic",
+                                   "Non-Hispanic White", "Non-Hispanic Black",
+                                   "Non-Hispanic Asian", "Other Race, incl.                                        Multi-Racial")),
+    education_level = factor(education,
+                    levels = c(1, 2, 3, 4, 5),
+                    labels = c("Less than 9th grade",
+                               "9th–11th grade",
+                               "High school graduate/GED",
+                               "Some college/AA degree",
+                               "College graduate or above")),
+    marital_status = factor(marital_status,
+                    levels = c(1, 2, 3, 4, 5, 6),
+                    labels = c("Married", "Never married","Separated",                                        "Divorced", "Widowed", "Living with partner")),
+    family_income = factor(family_income,
+                    levels = c(1:10, 14, 15, 13, 12),        
+                    labels = c("$0-$4,999",
+                               "$5,000-$9,999",
+                               "$10,000-$14,999",
+                               "$15,000-$19,999",
+                               "$20,000-$24,999",
+                               "$25,000-$34,999",
+                               "$35,000-$44,999",
+                               "$45,000-$54,999",
+                               "$55,000-$64,999",
+                               "$65,000-$74,999",
+                               "$75,000-$99,999",
+                               "$100,000 and over",
+                               "Under $20,000",
+                               "$20,000 and over")),
+    family_size = factor(family_size, levels = 1:7,
+                     labels = c(as.character(1:6), "7 or more"), ordered =                          TRUE),
+    age_group = cut(age_years,
+                    breaks = c(0, 20, 40, 60, 80, Inf),
+                    right = FALSE,
+                    labels = c("0–19", "20–39", "40–59",
+                               "60–79", "80+"))
+  )
+
+# Check the recoding with frequency tables
+count(demo_pres_clean_cols, gender) |>
+  knitr::kable(caption = "Participants by gender")
+count(demo_pres_clean_cols, age_group) |>
+  knitr::kable(caption = "Participants by age group")
+count(demo_pres_clean_cols, education_level) |>
+  knitr::kable(caption = "Participants by education level")
+
+# Snippet of the recoded variables
+demo_pres_clean_cols |>
+  select(participant_id, survey_cycle, gender, age_years, age_group,
+         ethnicity_3, marital_status) |>
+  head(6) |>
+  knitr::kable(caption = "Snippet of the recoded variables")
+```
+
+The frequency tables confirm that the numeric codes were converted into the
+intended labelled categories; the `NA` rows in the education table are the
+participants for whom education was not recorded.
+
+## Removing Duplicates and Invalid Pressure Readings
+
+Fully duplicated rows were removed with `distinct()`, and an additional check
+counted whether any participant appears more than once within a survey cycle.
+
+The `blood_pressure_comment` variable (`PEASCCT1`) is filled when the
+technician notes a problem with the measurement. 
+Any row with a comment is therefore treated as an invalid reading, and 
+its eight blood pressure measurements are set to missing using `mutate(across(...))` 
+with `if_else()`. Counts before and after confirm that the step worked as intended.
+
+```{r removing duplicate and invalid readings}
+#removing duplicates and Invalid Pressure Readings
+n_before <- nrow(demo_pres_clean_cols)
+demo_pres_clean_cols <- distinct(demo_pres_clean_cols)
+n_duplicates <- n_before - nrow(demo_pres_clean_cols)
+ 
+# Extra check on the key: is any participant listed more than once in a cycle?
+n_duplicated_ids <- sum(duplicated(demo_pres_clean_cols[c("participant_id", "survey_cycle")]))
+
+##setting technician comments on pressure reading to invalid
+bp_cols <- c(paste0("systolic_bp_", 1:4), paste0("diastolic_bp_", 1:4))
+
+n_flagged         <- sum(!is.na(demo_pres_clean_cols$blood_pressure_comment))
+n_readings_before <- sum(!is.na(demo_pres_clean_cols[bp_cols]))
+
+demo_pres_clean_cols <- demo_pres_clean_cols |>
+  mutate(across(all_of(bp_cols),
+                ~ if_else(!is.na(blood_pressure_comment), NA_real_, .x)))
+
+# Readings still present on flagged rows (should be zero)
+n_readings_after  <- sum(!is.na(demo_pres_clean_cols[bp_cols]))
+
+n_remaining_flagged <- demo_pres_clean_cols |>
+  filter(!is.na(blood_pressure_comment)) |>
+  summarise(across(all_of(bp_cols), ~ sum(!is.na(.)))) |>
+  sum() 
+
+##exporting the cleaned data file in.rds 
+dir.create("output", showWarnings = FALSE)
+saveRDS(demo_pres_clean_cols, "output/demo_pres_clean_cols.rds")
+
+```
+`r n_duplicates` fully duplicated rows were removed, and `r n_duplicated_ids`
+participants appear more than once within a survey cycle. `
+
+`r fmt(n_flagged)` rows carried a technician comment, so their blood pressure readings were set to
+missing. This reduced the number of recorded readings from
+`r fmt(n_readings_before)` to `r fmt(n_readings_after)`, and
+`r n_remaining_flagged` readings remain on the commented rows. Although 1,000 rows 
+carried a technician comment, only 28 readings were removed, which shows that most 
+commented rows already had missing blood pressure values.
+
+The cleaned dataset was saved as `demo_pres_clean_cols.rds` in the `output` folder.
+
+# 5 Filtering and Reshaping Dataset
+This section filtered the cleaned data and reorganized it into a format
+suitable for analysis and for comparison across readings.
+
+## Filtering participants 21 Years and Older and reshaping Pressure Readings
+`filter()` kept only adults aged 21 years or older with a known age, and
+`select()` retained only the variables required for the analysis, producing the
+wide-format dataset `data_analyze`.
+
+## Reshaping the Pressure Readings
+
+`pivot_longer()` reshaped the four systolic and four diastolic reading columns
+from wide to long format. The `names_pattern` argument splits each column name
+into its measure (`systolic_bp` or `diastolic_bp`, which become column names via
+`".value"`) and the reading number (1 to 4), so each row in the long dataset is
+one reading for one participant. `mutate()` then converted `reading_number` to an
+integer.
+```{r filtering participants 21+ and reshaping dataset}
+data_analyze <- demo_pres_clean_cols |>
+  filter(!is.na(age_years), age_years >= 21) |>
+  select(age_years, participant_id, gender,
+         systolic_bp_1, systolic_bp_2, systolic_bp_3, systolic_bp_4,
+         diastolic_bp_1, diastolic_bp_2, diastolic_bp_3, diastolic_bp_4)
+
+#Pivot to long format
+data_analyze_long <- data_analyze |>
+  pivot_longer(
+    cols = starts_with(c("systolic_bp_", "diastolic_bp_")),
+    names_to = c(".value", "reading_number"),
+    names_pattern = "(.*)_(\\d)"
+  ) |>
+  mutate(reading_number = as.integer(reading_number))
+
+# Snippets of some variables in the wide and all variable in long data
+data_analyze |>
+  select(age_years, participant_id, gender, systolic_bp_1, systolic_bp_2,
+         diastolic_bp_1, diastolic_bp_2,systolic_bp_4,
+         diastolic_bp_4) |>
+  head(4) |>
+  knitr::kable(caption = "Snippet of the wide-format data (data_analyze)")
+
+data_analyze_long |>
+  head(8) |>
+  knitr::kable(caption = "Snippet of the long-format data (data_analyze_long)")
+
+# Summary of readings by reading number
+data_analyze_long |>
+  group_by(reading_number) |>
+  summarise(n_rows = n(),
+            valid_systolic = sum(!is.na(systolic_bp)),
+            mean_systolic = round(mean(systolic_bp, na.rm = TRUE), 1),
+            mean_diastolic = round(mean(diastolic_bp, na.rm = TRUE), 1)) |>
+  knitr::kable(caption = "Blood pressure readings by reading number")
+```
+The filtered wide-format dataset (`data_analyze`) contains
+`r fmt(nrow(data_analyze))` rows and `r ncol(data_analyze)` columns. After
+pivoting, `data_analyze_long` contains `r fmt(nrow(data_analyze_long))` rows and
+`r ncol(data_analyze_long)` columns. 
+
+The long dataset has four times as many rows because each participant's four 
+systolic and diastolic reading pairs became four separate observations, 
+while the number of columns fell from `r ncol(data_analyze)` to `r ncol(data_analyze_long)`.
+The reading-number summary shows how many valid readings are available for each reading, 
+which is useful when deciding how to handle the later readings that are often missing.
+
+# 6 Conclusion
+
+This report presented a data preparation process using NHANES demographic and
+blood pressure data from the 2013–2014, 2015–2016, and 2017–2018 survey cycles.
+The datasets were combined, reviewed, and cleaned by standardizing column names,
+recoding variables, creating age groups, checking for duplicates, and setting
+blood pressure readings that carried a technician comment to missing.
+
+The data were then filtered to participants aged 21 years and older and reshaped
+from wide to long format. The filtered wide dataset contained
+`r fmt(nrow(data_analyze))` rows and `r ncol(data_analyze)` columns, while the
+long-format dataset contained `r fmt(nrow(data_analyze_long))` rows and
+`r ncol(data_analyze_long)` columns. These steps organized the data into a
+consistent, analysis-ready structure for examining demographic characteristics
+and blood pressure measurements.
+
