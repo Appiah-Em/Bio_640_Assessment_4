@@ -1,0 +1,66 @@
+---
+title: "NHANES Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+---
+
+```{r setup, include=FALSE}
+library(pacman)
+pacman::p_load(
+  rio,
+  here,
+  tidyverse,
+  flexdashboard,
+  knitr,
+  kableExtra,
+  scales
+)
+
+nhanes_df <- import(here("data", "cleaned", "cleaned_NHANES.csv")) %>%
+  mutate(
+    avg_sbp = if_else(
+      rowSums(!is.na(cbind(systolic_bp_1, systolic_bp_2, systolic_bp_3, systolic_bp_4))) == 0,
+      NA_real_,
+      rowMeans(cbind(systolic_bp_1, systolic_bp_2, systolic_bp_3, systolic_bp_4), na.rm = TRUE)
+    )
+  )
+```
+
+Row {data-height=650}
+-----------------------------------------------------------------------
+
+### Age distribution of NHANES participants
+
+```{r age-plot}
+ggplot(nhanes_df, aes(x = age)) +
+  geom_histogram(binwidth = 5, boundary = 0, closed = "left", colour = "white") +
+  labs(x = "Age (years)", y = "Number of participants") +
+  theme_minimal()
+```
+
+Row {data-height=350}
+-----------------------------------------------------------------------
+
+### Participants aged 21 or older
+
+```{r gauge-21plus}
+pct_21 <- mean(nhanes_df$age >= 21, na.rm = TRUE) * 100
+
+gauge(round(pct_21, 1), min = 0, max = 100, symbol = "%",
+      gaugeSectors(success = c(60, 100), warning = c(30, 59.9), danger = c(0, 29.9)))
+```
+
+
+### Average systolic BP above 120 mm Hg
+
+```{r value-sbp}
+pct_sbp <- mean(nhanes_df$avg_sbp > 120, na.rm = TRUE) * 100
+
+valueBox(paste0(round(pct_sbp, 1), "%"),
+         caption = "of participants with a measured average systolic BP above 120 mm Hg",
+         icon = "fa-heartbeat", color = "danger")
+
+```
+

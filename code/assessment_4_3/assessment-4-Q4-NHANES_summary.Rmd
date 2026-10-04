@@ -1,0 +1,162 @@
+---
+title: "Description of the Cleaned NHANES Dataset"
+author: "Emelia Appiah"
+date: "`r Sys.Date()`"
+output: pdf_document
+references:
+- id: nhanes
+  type: dataset
+  author:
+  - literal: Centers for Disease Control and Prevention (CDC), National Center for Health Statistics (NCHS)
+  title: National Health and Nutrition Examination Survey Data
+  publisher: U.S. Department of Health and Human Services
+  publisher-place: Hyattsville, MD
+  accessed:
+    year: 2026
+  URL: https://www.cdc.gov/nchs/nhanes/
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(pacman)
+pacman::p_load(rio, here, tidyverse, kableExtra, scales)
+```
+
+## R Markdown
+
+```{r data-import and analysis}
+nhanes_df <- import(here("data", "cleaned", "cleaned_NHANES.csv")) %>%
+  rename(wave = wave_id) %>%
+  mutate(
+    wave = factor(wave),
+    avg_sbp = if_else(
+      rowSums(!is.na(cbind(systolic_bp_1, systolic_bp_2,
+                           systolic_bp_3, systolic_bp_4))) == 0,
+      NA_real_,
+      rowMeans(cbind(systolic_bp_1, systolic_bp_2,
+                     systolic_bp_3, systolic_bp_4), na.rm = TRUE)
+    ),
+    ethnicity_2 = factor(
+      ethnicity_2,
+      levels = c("Mexican", "Other Hispanic", "White",
+                 "Black", "Asian", "Other")
+    )
+  )
+```
+
+```{r values-for-text}
+# Summary analysis
+wave_summary <- nhanes_df %>%
+  group_by(wave) %>%
+  summarise(
+    n          = n(),
+    pct_male   = mean(gender == "Male") * 100,
+    n_sbp      = sum(!is.na(avg_sbp)),
+    mean_sbp   = mean(avg_sbp, na.rm = TRUE),
+    median_sbp = median(avg_sbp, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+n_waves       <- nrow(wave_summary)
+largest_wave  <- wave_summary %>% slice_max(n, n = 1, with_ties = FALSE)
+smallest_wave <- wave_summary %>% slice_min(n, n = 1, with_ties = FALSE)
+male_range    <- range(wave_summary$pct_male)
+
+eth_overall <- nhanes_df %>%
+  count(ethnicity_2) %>%
+  mutate(pct = n / sum(n) * 100) %>%
+  arrange(desc(n))
+
+highest_sbp_wave <- wave_summary %>% slice_max(mean_sbp, n = 1, with_ties = FALSE)
+lowest_sbp_wave  <- wave_summary %>% slice_min(mean_sbp, n = 1, with_ties = FALSE)
+n_missing_sbp    <- sum(is.na(nhanes_df$avg_sbp))
+mean_above_median <- all(wave_summary$mean_sbp > wave_summary$median_sbp)
+```
+
+# Introduction
+The National Health and Nutrition Examination Survey (NHANES) is a program of the National Center for Health Statistics (NCHS), part of the U.S. Centers for Disease Control and Prevention, that assesses the health and nutritional status of adults and children in the United States [@nhanes]. Each survey cycle combines household interviews with standardized physical examinations, including blood pressure measurements, and is designed to represent the U.S. civilian non-institutionalized population.
+
+This report describes the cleaned NHANES dataset used in earlier assignments. It contains `r comma(nrow(nhanes_df))` participants across `r n_waves` survey waves. The aim is to summarize who is in the sample and how average systolic blood pressure is distributed, wave by wave. All figures are unweighted counts and percentages of the sample; NHANES survey weights were not applied, so the results describe this dataset rather than the U.S. population.
+
+# Data and Variables
+
+Three variables are summarized:
+
+- **Gender** (`RIAGENDR`), recorded as Male or Female.
+- **Ethnicity** (`ethnicity_2`, derived from `RIDRETH3`), with six categories: Mexican, Other Hispanic, White, Black, Asian, and Other. This version was kept instead of `ethnicity_1` because it reports Asian participants as a separate group.
+- **Average systolic blood pressure** (mm Hg), calculated for each participant as the mean of up to four systolic readings. Participants with no readings have a missing value (`r comma(n_missing_sbp)` participants).
+
+The original NHANES labels are kept for consistency with the course materials. In current practice, "gender" here would be labelled *sex*, since it records biological sex, and "ethnicity" would be labelled *race*, since it describes race rather than ethnicity.
+
+# Demographic Assessment
+
+```{r Demographic Analysis}
+fmt <- function(n, total) sprintf("%s (%.1f%%)", scales::comma(n), 100 * n / total)
+
+n_wave <- nhanes_df %>% count(wave, name = "total")
+
+sample_row <- n_wave %>%
+  transmute(wave, characteristic = "Sample size", value = scales::comma(total))
+
+male_row <- nhanes_df %>%
+  group_by(wave) %>%
+  summarise(n_male = sum(gender == "Male"), total = n()) %>%
+  transmute(wave, characteristic = "Males, n (%)", value = fmt(n_male, total))
+
+eth_rows <- nhanes_df %>%
+  count(wave, ethnicity_2) %>%
+  left_join(n_wave, by = "wave") %>%
+  transmute(wave, characteristic = as.character(ethnicity_2), value = fmt(n, total))
+
+demo_table <- bind_rows(sample_row, male_row, eth_rows) %>%
+  pivot_wider(names_from = wave, values_from = value)
+
+kbl(demo_table, booktabs = TRUE,
+    col.names = c("Characteristic", names(demo_table)[-1]),
+    caption = "Sample characteristics of the cleaned NHANES dataset by wave") %>%
+  kable_styling(latex_options = c("hold_position", "striped")) %>%
+  add_header_above(c(" " = 1, "NHANES wave" = ncol(demo_table) - 1)) %>%
+  pack_rows("Ethnicity, n (%)", 3, 8) %>%          # 6 ethnicity rows
+  row_spec(0, bold = TRUE) %>%
+  row_spec(1, bold = TRUE) %>%
+  footnote(general = "Percentages are within each wave. 'Gender' (RIAGENDR) records biological sex and 'ethnicity' (RIDRETH3) describes race; original NHANES labels are kept.",
+           threeparttable = TRUE)
+```
+
+Table 1 shows the composition of the sample in each wave. The largest wave is `r largest_wave$wave`, with `r comma(largest_wave$n)` participants, and the smallest is `r smallest_wave$wave`, with `r comma(smallest_wave$n)` participants.
+
+The share of males ranges from `r sprintf("%.1f", male_range[1])`% to `r sprintf("%.1f", male_range[2])`% across waves, so the balance between males and females `r if (diff(male_range) < 2) "is very similar from one wave to the next" else "shifts somewhat between waves"`.
+
+Across all waves combined, the largest ethnic group is `r eth_overall$ethnicity_2[1]` (`r sprintf("%.1f", eth_overall$pct[1])`% of participants), followed by `r eth_overall$ethnicity_2[2]` (`r sprintf("%.1f", eth_overall$pct[2])`%) and `r eth_overall$ethnicity_2[3]` (`r sprintf("%.1f", eth_overall$pct[3])`%). The smallest group is `r eth_overall$ethnicity_2[nrow(eth_overall)]` (`r sprintf("%.1f", eth_overall$pct[nrow(eth_overall)])`%). Because NHANES deliberately oversamples some groups, these proportions reflect the survey design and should not be read as the ethnic composition of the U.S. population.
+
+## Blood Pressure Analysis
+
+```{r Blood pressure assessment}
+sbp_table <- nhanes_df %>%
+  group_by(wave) %>%
+  summarise(N = sum(!is.na(avg_sbp)),
+            Min = min(avg_sbp, na.rm = TRUE),
+            Max = max(avg_sbp, na.rm = TRUE),
+            Median = median(avg_sbp, na.rm = TRUE),
+            Mean = mean(avg_sbp, na.rm = TRUE),
+            SD = sd(avg_sbp, na.rm = TRUE))
+
+kbl(sbp_table, booktabs = TRUE, digits = 1,
+    col.names = c("Wave", "N", "Min", "Max", "Median", "Mean", "SD"),
+    caption = "Average systolic blood pressure (mm Hg) by NHANES wave") %>%
+  kable_styling(latex_options = "hold_position") %>%
+  add_header_above(c(" " = 2, "Average systolic BP (mm Hg)" = 5)) %>%
+  column_spec(6, bold = TRUE) %>%
+  footnote(general = "Average of up to four readings per participant; N counts participants with at least one reading.")
+
+```
+
+Table 2 summarizes average systolic blood pressure for the `r comma(sum(wave_summary$n_sbp))` participants with at least one reading. The mean is highest in wave `r highest_sbp_wave$wave` (`r sprintf("%.1f", highest_sbp_wave$mean_sbp)` mm Hg) and lowest in wave `r lowest_sbp_wave$wave` (`r sprintf("%.1f", lowest_sbp_wave$mean_sbp)` mm Hg), a difference of `r sprintf("%.1f", highest_sbp_wave$mean_sbp - lowest_sbp_wave$mean_sbp)` mm Hg.
+
+`r if (mean_above_median) "In every wave the mean is higher than the median, which indicates a right-skewed distribution: a minority of participants with high blood pressure pulls the mean upward." else "The mean and median are close to each other in most waves, which suggests the distribution is fairly symmetric."` The overall range runs from `r sprintf("%.1f", min(sbp_table$Min))` to `r sprintf("%.1f", max(sbp_table$Max))` mm Hg. The low values largely reflect children and adolescents in the sample, whose blood pressure is naturally lower than that of adults.
+
+# Summary
+
+The cleaned NHANES dataset includes `r comma(nrow(nhanes_df))` participants across `r n_waves` waves. The balance of males and females is broadly similar across waves, and `r eth_overall$ethnicity_2[1]` participants form the largest ethnic group. Average systolic blood pressure varies only modestly between waves, with means between `r sprintf("%.1f", lowest_sbp_wave$mean_sbp)` and `r sprintf("%.1f", highest_sbp_wave$mean_sbp)` mm Hg. These descriptive results provide context for later analyses of blood pressure; such analyses should account for the wide age range in the sample and, for population estimates, the NHANES survey weights.
+
+# Reference
